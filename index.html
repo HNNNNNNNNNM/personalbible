@@ -119,6 +119,13 @@ summary{font-family:var(--serif);font-size:18px;font-weight:700;cursor:pointer}
 .latest .note{--tc:var(--line)}
 .more{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:9px 14px;font-size:15px}
 .empty{color:var(--muted);font-size:14px;margin:0}
+.dpick{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:16px;font-size:14px;color:var(--muted)}
+.dpick input,.dmove input{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--ink);font-size:15px}
+.dmoves{margin-top:18px;padding-top:14px;border-top:1px dashed var(--line);display:grid;gap:10px}
+.dmove{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:14px}
+.dmove span{flex:1 1 100%;font-family:var(--serif);font-weight:700}
+.dmove button{border:1px solid var(--line);background:transparent;border-radius:8px;padding:6px 12px;font-size:14px}
+.gdate .goday{font-size:13px}
 /* sheet */
 .sheet-bg{position:fixed;inset:0;background:rgba(10,14,18,.45);display:none;z-index:10}
 .sheet-bg.open{display:block}
@@ -166,6 +173,15 @@ summary{font-family:var(--serif);font-size:18px;font-weight:700;cursor:pointer}
   <details>
     <summary>설정</summary>
     <div class="set">
+      <div>
+        <h4>하루가 바뀌는 시각</h4>
+        <p class="hint">이 시각 전까지는 전날로 기록됩니다. 밤에 읽기 시작해 자정을 넘겨도 같은 날로 남습니다.</p>
+        <div class="row">
+          <select id="dayStart"></select>
+          <button class="btn" id="saveDay">저장</button>
+        </div>
+        <p class="msg" id="dayMsg"></p>
+      </div>
       <div>
         <h4>하루 기본 분량</h4>
         <p class="hint">제안 분량의 기준입니다. 장이 끝나는 지점이 가까우면 그곳에서 끊어 제안합니다.</p>
@@ -275,7 +291,7 @@ function finder(t, s, e){
 }
 
 /* ---------- state ---------- */
-const fresh = () => ({v:2, updated:0, pos:{H:0,G:0}, size:{H:20,G:7}, log:[]});
+const fresh = () => ({v:2, updated:0, dayStart:4, pos:{H:0,G:0}, size:{H:20,G:7}, log:[]});
 let state = fresh();
 function save(touch=true){
   if(touch) state.updated = Date.now();
@@ -287,7 +303,12 @@ function migrate(s){ return s.v === 2 ? s : {...fresh(), size:s.size}; }
 try { const raw = localStorage.getItem(KEY); if(raw){ const s = JSON.parse(raw); if(s && s.pos && s.size && Array.isArray(s.log)) state = migrate(s); save(false); } } catch(e){}
 
 const dkey = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-const todayKey = () => dkey(new Date());
+const dayStart = () => (state && Number.isInteger(state.dayStart)) ? state.dayStart : 4;
+function effNow(){ const d = new Date(); d.setHours(d.getHours() - dayStart()); return d; }
+const todayKey = () => dkey(effNow());
+const effKeyOf = ms => { const d = new Date(ms); d.setHours(d.getHours() - dayStart()); return dkey(d); };
+/* 오늘 카드가 '읽음' 상태인지: 기록 날짜가 오늘이거나, 오늘(하루 경계 기준) 체크한 기록 */
+function doneNow(){ const l = state.log[state.log.length-1]; return !!l && (l.d===todayKey() || (l.at && effKeyOf(l.at)===todayKey())); }
 const isDone = t => state.pos[t] >= T[t].total;
 
 function nextTrack(){
@@ -308,17 +329,18 @@ function noteChapterKey(l, n){ const x = locate(l.t, n.v==null ? l.s : n.v); ret
 function allNotes(){
   const out = [];
   state.log.forEach((l,li) => (l.n||[]).forEach((n,ni) => out.push({l, li, n, ni})));
-  return out;
+  return out.sort((a,b) => a.l.d<b.l.d ? -1 : a.l.d>b.l.d ? 1 : (a.li-b.li) || (a.ni-b.ni));
 }
 function noteHTML(o, showDate=true){
   return `<div class="note" style="--tc:${tvar(o.l.t)}">
     <p class="nref">${esc(noteRef(o.l,o.n))}</p>
     <p class="ntxt">${esc(o.n.x)}</p>
-    <div class="nmeta">${showDate?`<span>${fdate(o.l.d)}</span>`:""}<button class="del" data-li="${o.li}" data-ni="${o.ni}">지우기</button></div>
+    <div class="nmeta">${showDate?`<button class="del goday" data-k="${o.l.d}">${fdate(o.l.d)}</button>`:""}<button class="del" data-li="${o.li}" data-ni="${o.ni}">지우기</button></div>
   </div>`;
 }
 function bindDeletes(root, after){
-  root.querySelectorAll(".del").forEach(b => b.onclick = () => {
+  root.querySelectorAll(".goday").forEach(b => b.onclick = () => showDay(b.dataset.k));
+  root.querySelectorAll(".del:not(.goday)").forEach(b => b.onclick = () => {
     if(!confirm("이 문구를 지울까요?")) return;
     const l = state.log[+b.dataset.li]; if(!l || !l.n) return;
     l.n.splice(+b.dataset.ni, 1); if(!l.n.length) delete l.n;
@@ -343,7 +365,17 @@ function showDay(k){
   if(!logs.length){ closeSheet(); return; }
   const notes = allNotes().filter(o=>o.l.d===k);
   const sub = logs.map(o=>`${fmt(o.l.t,o.l.s,o.l.e)}, ${o.l.e-o.l.s+1}절`).join(" / ");
-  openSheet(fdate(k), sub, notes.length ? notes.map(o=>noteHTML(o,false)).join("") : `<p class="empty">이날 적어 둔 문구가 없습니다.</p>`, () => showDay(k));
+  const moves = logs.map(o=>`<div class="dmove"><span>${esc(fmt(o.l.t,o.l.s,o.l.e))}</span>
+    <input type="date" value="${o.l.d}" max="${todayKey()}" data-li="${o.li}" aria-label="바꿀 날짜"><button data-li="${o.li}">날짜 바꾸기</button></div>`).join("");
+  openSheet(fdate(k), sub, (notes.length ? notes.map(o=>noteHTML(o,false)).join("") : `<p class="empty">이날 적어 둔 문구가 없습니다.</p>`) + `<div class="dmoves">${moves}</div>`, () => showDay(k));
+  $("sheetBody").querySelectorAll(".dmove button").forEach(b => b.onclick = () => {
+    const inp = $("sheetBody").querySelector(`.dmove input[data-li="${b.dataset.li}"]`), v = inp.value, l = state.log[+b.dataset.li];
+    if(!l || !v || v===l.d) return;
+    if(v > todayKey()){ alert("오늘 이후 날짜로는 바꿀 수 없습니다."); inp.value = l.d; return; }
+    const other = state.log.some((x,i)=>x.d===v && i!==+b.dataset.li);
+    if(other && !confirm(`${fdate(v)}에 이미 다른 기록이 있습니다. 같은 날짜에 함께 둘까요?`)) return;
+    l.d = v; save(); renderAll(); showDay(v);
+  });
 }
 function showChapter(t, k){
   const c = T[t].ch[k];
@@ -357,7 +389,7 @@ function showAll(){
   if(!notes.length){ closeSheet(); return; }
   let html = "", cur = "";
   notes.forEach(o => {
-    if(o.l.d !== cur){ if(cur) html += "</div>"; cur = o.l.d; html += `<div class="group"><p class="gdate">${fdate(cur)}</p>`; }
+    if(o.l.d !== cur){ if(cur) html += "</div>"; cur = o.l.d; html += `<div class="group"><p class="gdate"><button class="del goday" data-k="${cur}">${fdate(cur)}</button></p>`; }
     html += noteHTML(o,false);
   });
   openSheet("적어 둔 문구", `모두 ${notes.length}개`, html + "</div>", showAll);
@@ -371,14 +403,14 @@ function renderLatest(){
 }
 
 /* ---------- today ---------- */
-let draftEnd = null;
+let draftEnd = null, draftDate = null;
 
 function renderToday(){
   const box = $("today");
   const last = state.log[state.log.length-1];
   const nt = nextTrack();
 
-  if(last && last.d === todayKey()){
+  if(doneNow()){
     const n = last.e-last.s+1;
     let next = "";
     if(nt){
@@ -386,7 +418,7 @@ function renderToday(){
       next = `<div class="next"><span class="dot" style="background:var(--${nt==="H"?"heb":"grk"})"></span>내일은 <b>${fmt(nt,s,e)}</b></div>`;
     }
     box.className = "today " + last.t;
-    box.innerHTML = `<p class="track">${TRACK_NAME[last.t]}, 오늘 읽음</p>
+    box.innerHTML = `<p class="track">${TRACK_NAME[last.t]}, ${last.d===todayKey() ? "오늘 읽음" : fdate(last.d)+" 기록으로 체크함"}</p>
       <p class="ref">${fmt(last.t,last.s,last.e)}</p>
       <p class="count">${n}절</p>
       <div class="notes-box">
@@ -420,6 +452,7 @@ function renderToday(){
     return;
   }
   const s = state.pos[nt], sug = suggest(nt, s);
+  if(!draftDate || draftDate > todayKey()) draftDate = todayKey();
   if(draftEnd===null || draftEnd<s || draftEnd>=T[nt].total) draftEnd = sug;
   const e = draftEnd, n = e-s+1;
   box.className = "today " + nt;
@@ -435,6 +468,7 @@ function renderToday(){
         <button data-k="ch" class="wide">장 끝까지</button>
       </div>
       ${e!==sug ? `<button class="reset-link" id="back">제안 분량으로 되돌리기</button>` : ""}
+      <div class="dpick"><span>기록 날짜</span><input type="date" id="dDate" value="${draftDate}" max="${todayKey()}"></div>
       <button class="done-btn" id="done">여기까지 읽음</button>
     </div>`;
   box.querySelectorAll(".steps button").forEach(b => b.onclick = () => {
@@ -443,9 +477,11 @@ function renderToday(){
     renderToday(); renderMap();
   });
   if($("back")) $("back").onclick = () => { draftEnd = sug; renderToday(); renderMap(); };
+  $("dDate").onchange = ev => { const v = ev.target.value; if(v && v <= todayKey()) draftDate = v; else ev.target.value = draftDate; };
   $("done").onclick = () => {
-    const entry = {d:todayKey(), t:nt, s, e:draftEnd};
-    if(state.stash && state.stash.d===entry.d && state.stash.t===nt){
+    const entry = {d:draftDate || todayKey(), t:nt, s, e:draftEnd, at:Date.now()};
+    draftDate = null;
+    if(state.stash && state.stash.t===nt){
       const keep = state.stash.n.filter(x => x.v==null || (x.v>=s && x.v<=draftEnd));
       if(keep.length) entry.n = keep;
     }
@@ -476,16 +512,16 @@ function renderStats(){
   const reads = ["H","G"].reduce((a,t)=>a+Math.ceil((T[t].total-state.pos[t])/avg(t)),0);
   if(reads===0){ $("eta").textContent = "완독했습니다."; }
   else{
-    const doneToday = state.log.length && state.log[state.log.length-1].d===todayKey();
-    const d = new Date(); d.setDate(d.getDate() + reads - (doneToday?0:1));
+    const doneToday = doneNow();
+    const d = effNow(); d.setDate(d.getDate() + reads - (doneToday?0:1));
     $("eta").textContent = `최근 분량으로 매일 읽으면 ${d.getFullYear()}년 ${d.getMonth()+1}월에 완독합니다. 남은 읽기 ${reads}회.`;
   }
 
   const byDay = {}, hasNote = {};
-  state.log.forEach(l=>{ byDay[l.d] = l.t; if(l.n && l.n.length) hasNote[l.d] = true; });
+  state.log.forEach(l=>{ if(!byDay[l.d]) byDay[l.d] = l.t; if(l.n && l.n.length) hasNote[l.d] = true; });
   let html = "", cnt = 0;
   for(let i=34;i>=0;i--){
-    const d = new Date(); d.setDate(d.getDate()-i);
+    const d = effNow(); d.setDate(d.getDate()-i);
     const t = byDay[dkey(d)]; if(t) cnt++;
     const k = dkey(d);
     html += `<span class="day${t?" "+t:""}${hasNote[k]?" has":""}${i===0?" now":""}" data-k="${k}" title="${d.getMonth()+1}월 ${d.getDate()}일"></span>`;
@@ -514,7 +550,7 @@ function buildMap(){
 }
 function renderMap(){
   const nt = nextTrack(), last = state.log[state.log.length-1];
-  const pending = nt && !(last && last.d===todayKey());
+  const pending = nt && !doneNow();
   const noted = new Set(allNotes().map(o => noteChapterKey(o.l,o.n)));
   ["H","G"].forEach(t=>{
     const p = state.pos[t];
@@ -588,9 +624,14 @@ async function pull(){
 }
 
 /* ---------- settings ---------- */
-function fillSizes(){ $("sizeH").value = state.size.H; $("sizeG").value = state.size.G; }
+function fillSizes(){ $("sizeH").value = state.size.H; $("sizeG").value = state.size.G; $("dayStart").value = dayStart(); }
 function initSettings(){
+  $("dayStart").innerHTML = Array.from({length:7},(_,h)=>`<option value="${h}">${h===0?"자정 (0시)":`새벽 ${h}시`}</option>`).join("");
   fillSizes();
+  $("saveDay").onclick = () => {
+    state.dayStart = +$("dayStart").value; draftDate = null; save(); renderAll();
+    $("dayMsg").textContent = state.dayStart===0 ? "자정에 하루가 바뀝니다." : `새벽 ${state.dayStart}시 전까지는 전날로 기록합니다.`;
+  };
   $("tokMsg").textContent = sync.gistId ? "연결되어 있습니다." : "";
   $("connect").onclick = async () => {
     const t = $("tok").value.trim();
@@ -643,7 +684,7 @@ function initSettings(){
 }
 
 function renderAll(){
-  const d = new Date();
+  const d = effNow();
   $("date").textContent = d.toLocaleDateString("ko-KR",{month:"long",day:"numeric",weekday:"long"});
   renderToday(); renderStats(); renderLatest(); renderMap();
 }
