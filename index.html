@@ -110,6 +110,7 @@ summary{font-family:var(--serif);font-size:18px;font-weight:700;cursor:pointer}
 .nform{display:grid;gap:8px}
 .nform select,.nform textarea{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%}
 .nform textarea{min-height:72px;resize:vertical;font-size:16px}
+.nform .row{display:flex;gap:8px}
 .nform button{justify-self:start;border:0;border-radius:8px;padding:9px 16px;background:var(--tc);color:var(--ontrack);font-weight:600}
 .day{cursor:default;position:relative}
 .day.H,.day.G{cursor:pointer}
@@ -335,17 +336,40 @@ function noteHTML(o, showDate=true){
   return `<div class="note" style="--tc:${tvar(o.l.t)}">
     <p class="nref">${esc(noteRef(o.l,o.n))}</p>
     <p class="ntxt">${esc(o.n.x)}</p>
-    <div class="nmeta">${showDate?`<button class="del goday" data-k="${o.l.d}">${fdate(o.l.d)}</button>`:""}<button class="del" data-li="${o.li}" data-ni="${o.ni}">지우기</button></div>
+    <div class="nmeta">${showDate?`<button class="del goday" data-k="${o.l.d}">${fdate(o.l.d)}</button>`:""}<button class="del ed" data-li="${o.li}" data-ni="${o.ni}">수정</button><button class="del rm" data-li="${o.li}" data-ni="${o.ni}">지우기</button></div>
   </div>`;
 }
 function bindDeletes(root, after){
   root.querySelectorAll(".goday").forEach(b => b.onclick = () => showDay(b.dataset.k));
-  root.querySelectorAll(".del:not(.goday)").forEach(b => b.onclick = () => {
+  root.querySelectorAll(".ed").forEach(b => b.onclick = () => editNote(b, after));
+  root.querySelectorAll(".rm").forEach(b => b.onclick = () => {
     if(!confirm("이 문구를 지울까요?")) return;
     const l = state.log[+b.dataset.li]; if(!l || !l.n) return;
     l.n.splice(+b.dataset.ni, 1); if(!l.n.length) delete l.n;
     save(); renderAll(); if(after) after();
   });
+}
+
+function editNote(btn, after){
+  const li = +btn.dataset.li, ni = +btn.dataset.ni, l = state.log[li];
+  if(!l || !l.n || !l.n[ni]) return;
+  const n = l.n[ni], box = btn.closest(".note");
+  const opts = Array.from({length:l.e-l.s+1},(_,i)=>l.s+i)
+    .map(v=>`<option value="${v}"${n.v===v?" selected":""}>${esc(fmt(l.t,v,v))}</option>`).join("");
+  box.innerHTML = `<div class="nform">
+    <select class="eV"><option value=""${n.v==null?" selected":""}>구절 선택 안 함 (그날 범위 전체)</option>${opts}</select>
+    <textarea class="eX"></textarea>
+    <div class="row"><button class="eS">저장</button><button class="eC more">취소</button></div>
+  </div>`;
+  box.querySelector(".eX").value = n.x;
+  box.querySelector(".eX").focus();
+  box.querySelector(".eC").onclick = () => { renderAll(); if(after) after(); };
+  box.querySelector(".eS").onclick = () => {
+    const x = box.querySelector(".eX").value.trim(); if(!x){ box.querySelector(".eX").focus(); return; }
+    const v = box.querySelector(".eV").value;
+    n.x = x; n.v = v==="" ? null : +v; n.edited = Date.now();
+    save(); renderAll(); if(after) after();
+  };
 }
 
 /* ---------- sheet ---------- */
